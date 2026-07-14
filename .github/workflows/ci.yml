@@ -1,0 +1,58 @@
+name: MSML Workflow CI
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build-train-deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Run actions/checkout@v3
+        uses: actions/checkout@v3
+
+      - name: Set up Python 3.12.7
+        uses: actions/setup-python@v4
+        with:
+          python-version: "3.12.7"
+
+      - name: Check Env
+        run: python --version
+
+      - name: Install dependencies
+        run: pip install mlflow==2.19.0 pandas numpy scikit-learn
+
+      - name: Run mlflow project
+        run: |
+          cd MLProject
+          mlflow run . --env-manager=local
+
+      - name: Get latest MLflow run_id
+        run: |
+          cd MLProject
+          RUN_ID=$(ls -t mlruns/0 | grep -v meta.yaml | head -n 1)
+          echo "RUN_ID=$RUN_ID" >> $GITHUB_ENV
+
+      - name: Upload to GitHub (artifact)
+        uses: actions/upload-artifact@v4
+        with:
+          name: mlflow-artifacts
+          path: MLProject/mlruns/
+
+      - name: Build Docker Model
+        run: |
+          cd MLProject
+          mlflow models build-docker -m "runs:/${{ env.RUN_ID }}/model" -n telco-churn-model --enable-mlserver
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Tag Docker Image
+        run: docker tag telco-churn-model ${{ secrets.DOCKERHUB_USERNAME }}/telco-churn-model:latest
+
+      - name: Push Docker Image
+        run: docker push ${{ secrets.DOCKERHUB_USERNAME }}/telco-churn-model:latest
